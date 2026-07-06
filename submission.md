@@ -89,6 +89,9 @@ the [Milestone 2](#milestone-2--root-cause-analyses--fixes) section below.
 
 ## Milestone 1 — Codebase Map
 
+> Written during orientation, **before** opening any issue or changing any code — the
+> goal here was to understand how the app is put together, not to hunt bugs.
+
 ### Setup confirmed
 
 - Python 3.13, virtualenv in `.venv`, deps from `requirements.txt` installed.
