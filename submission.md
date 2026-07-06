@@ -387,3 +387,38 @@ the repro localized the loss to "always exactly the last element."
 
 Final state: `pytest tests/` → **13 passed**. Each fix is a separate commit on
 `bugfix/mixtape` using conventional-commit messages.
+
+### Bonus — bug found while reviewing (not in the issue tracker)
+
+**Issue B1 — Adding a *new* song to a playlist crashes with an IntegrityError**
+
+**How I found it.** While building the Issue #4 reproduction I tried to add a song
+that wasn't already in a playlist via `add_to_playlist`, and it raised
+`sqlite3.IntegrityError: NOT NULL constraint failed: playlist_entries.position`.
+This isn't one of the five tracked issues, but it's a genuine crash on a core action
+(`POST /playlists/<id>/songs`), so I fixed it.
+
+**The root cause.** `add_to_playlist` added the song with
+`playlist.songs.append(song)`. `Playlist.songs` is a relationship whose secondary is
+the `playlist_entries` association table, and that table has **NOT NULL** `position`
+and `added_by` columns with no defaults. The ORM relationship only knows how to write
+`playlist_id`, `song_id`, and the defaulted `added_at` — it has no way to supply
+`position`/`added_by` — so the INSERT violated the `position` NOT NULL constraint.
+(The seed data never hit this because it inserts into `playlist_entries` directly with
+an explicit `position`.)
+
+**My fix and side-effect check.** Replaced the relationship append with a direct
+`playlist_entries.insert()` that supplies `position = max(existing position) + 1` and
+`added_by = added_by_user_id`, guarded by a membership check against the association
+table so re-adding is idempotent. Verified: adding a new song now succeeds, lands at a
+contiguous position (a 7-song playlist grew to positions `[1..8]`), the sharer gets
+their `song_added_to_playlist` notification, the new song shows up in
+`get_playlist_songs` (as the last entry, working alongside the Issue #5 fix), and
+re-adding the same song neither duplicates nor crashes. `pytest tests/` → 13 passed.
+
+**AI usage.** I asked AI to explain *why* appending through a `secondary` relationship
+can't populate extra association-table columns; it confirmed that SQLAlchemy's
+secondary-relationship writes only manage the two FK columns and that the documented
+pattern for association tables with extra data is either an explicit insert or an
+association-object model. I chose the explicit insert to match how `seed_data.py`
+already writes these rows.
