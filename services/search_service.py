@@ -5,7 +5,7 @@ Handles song search logic.
 """
 
 from app import db
-from models import Song, Tag, song_tags
+from models import Song
 
 
 def search_songs(query: str) -> list[dict]:
@@ -22,9 +22,12 @@ def search_songs(query: str) -> list[dict]:
         A list of song dicts. Each dict includes all song fields plus a
         'tags' list of tag name strings.
     """
+    # No join to song_tags here: the filter only touches Song.title/artist, and
+    # to_dict() loads each song's tags via the `tags` relationship. Joining the
+    # song_tags association table would fan out one row per tag (a song with 3 tags
+    # would appear 3 times), so we query Song directly.
     results = (
         db.session.query(Song)
-        .outerjoin(song_tags, Song.id == song_tags.c.song_id)
         .filter(
             db.or_(
                 Song.title.ilike(f"%{query}%"),
