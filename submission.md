@@ -65,6 +65,28 @@ checks; `git` for the per-fix commits.
 
 ---
 
+## Commit history (`git log --oneline` on `bugfix/mixtape`)
+
+Each bug fix is a separate commit with a `fix:` prefix.
+
+![git log --oneline of the bugfix/mixtape branch](docs/git-log.png)
+
+```
+62e3f8d fix: insert playlist_entries directly so adding a new song doesn't crash
+0d468a0 docs: add AI usage section and finalize submission for review
+390e85f fix: return all playlist songs instead of dropping the last one
+7b2a91b fix: notify song sharer when their song is rated
+9dd24a6 fix: remove spurious Sunday guard from streak increment logic
+2dfdeaa Add .gitignore file and update README with setup instructions
+7b64551 initial commit
+```
+
+The three required fixes are `9dd24a6` (#1), `7b2a91b` (#4), and `390e85f` (#5);
+`62e3f8d` is a bonus crash fix found during review. Full root cause analyses are in
+the [Milestone 2](#milestone-2--root-cause-analyses--fixes) section below.
+
+---
+
 ## Milestone 1 — Codebase Map
 
 ### Setup confirmed
