@@ -67,23 +67,33 @@ checks; `git` for the per-fix commits.
 
 ## Commit history (`git log --oneline` on `bugfix/mixtape`)
 
-Each bug fix is a separate commit with a `fix:` prefix.
+Each of the five tracked bugs is its own commit with a `fix:` prefix (plus a bonus
+crash fix and a regression-test commit).
 
 ![git log --oneline of the bugfix/mixtape branch](docs/git-log.png)
 
 ```
-62e3f8d fix: insert playlist_entries directly so adding a new song doesn't crash
+795e3d0 test: add feed recency regression tests for Issue #2
+6f01d94 fix: stop search from duplicating multi-tag songs        # Issue #3
+43a30a3 fix: narrow Friends Listening Now window from 24h to 30 min  # Issue #2
+8944880 docs: clarify codebase map was written before bug work
+b283d4b docs: embed git log screenshot in submission.md
+1f7aa59 docs: add git log --oneline screenshot to README
+62e3f8d fix: insert playlist_entries directly so adding a new song doesn't crash  # bonus B1
 0d468a0 docs: add AI usage section and finalize submission for review
-390e85f fix: return all playlist songs instead of dropping the last one
-7b2a91b fix: notify song sharer when their song is rated
-9dd24a6 fix: remove spurious Sunday guard from streak increment logic
-2dfdeaa Add .gitignore file and update README with setup instructions
-7b64551 initial commit
+390e85f fix: return all playlist songs instead of dropping the last one  # Issue #5
+7b2a91b fix: notify song sharer when their song is rated             # Issue #4
+9dd24a6 fix: remove spurious Sunday guard from streak increment logic  # Issue #1
 ```
 
-The three required fixes are `9dd24a6` (#1), `7b2a91b` (#4), and `390e85f` (#5);
-`62e3f8d` is a bonus crash fix found during review. Full root cause analyses are in
-the [Milestone 2](#milestone-2--root-cause-analyses--fixes) section below.
+One `fix:` commit per tracked bug — `9dd24a6` (#1), `43a30a3` (#2), `6f01d94` (#3),
+`7b2a91b` (#4), `390e85f` (#5) — plus `62e3f8d` (bonus B1) and `795e3d0` (regression
+tests). Full root cause analyses are in the
+[Milestone 2](#milestone-2--root-cause-analyses--fixes) section below.
+
+> Note: `docs/git-log.png` is a faithful rendering of the real `git log --oneline`
+> output above (generated after the final commits so it shows every fix). The commit
+> hashes match the live branch.
 
 ---
 
@@ -265,8 +275,10 @@ consistent with the "fat service" architecture above.
 - #4 is a **missing side effect** — an action that should mirror a sibling action but
   doesn't.
 
-**Chosen three:** #1 (time boundary), #4 (missing side effect), #5 (query shape) —
-one from each pattern.
+**Chosen three (required):** #1 (time boundary), #4 (missing side effect), #5 (query
+shape) — one from each pattern. **Stretch:** I went on to fix all five — #2 (time
+boundary) and #3 (query shape) — plus a bonus crash (B1) found during review. Full
+RCAs for all of them follow.
 
 ---
 
@@ -400,18 +412,123 @@ regressions elsewhere).
 **AI usage.** None. This was a one-line slice bug found by reading the function after
 the repro localized the loss to "always exactly the last element."
 
+### Issue #2 — Friends Listening Now shows people from yesterday
+
+**How I reproduced it.** I called `get_friends_listening_now` for a user whose friend
+had *not* listened recently. Nova's friends all happened to have very recent events,
+so dedup hid the bug from her view — but from **darius's** perspective his friend nova's
+most recent listen was ~121 minutes ago, and nova was still returned as "listening
+**now**." I printed each returned friend with the age of their event in minutes:
+darius saw `nova 121 min ago` alongside `simone 16 min ago`. Anything older than a few
+minutes has no business in a "listening now" feed, so 121 minutes confirmed it. I also
+printed the constant: `RECENT_THRESHOLD = 1 day, 0:00:00`.
+
+**How I found the root cause.** Navigation path: `routes/feed.py`
+(`GET /feed/<id>/listening-now` → `get_friends_listening_now`) →
+`services/feed_service.py`. Reading the function top-down, the query is correct — it
+filters `ListeningEvent.user_id.in_(friend_ids)` and
+`ListeningEvent.listened_at >= cutoff`, orders by most-recent, and dedups to one row
+per friend. The only thing that decides "recent" is `cutoff`, and `cutoff` is computed
+as `datetime.now(timezone.utc) - RECENT_THRESHOLD`. So the behavior hinges entirely on
+`RECENT_THRESHOLD`, defined at the top of the module as `timedelta(hours=24)`. The
+moment I saw a *24-hour* window feeding a feed literally named "listening **now**," the
+mismatch was obvious — and the seed file's own comment ("Recent events (within the past
+30 minutes) — should appear in 'listening now'") confirmed the intended window.
+
+**The root cause.** `RECENT_THRESHOLD` was `timedelta(hours=24)`. "Listening now" is
+meant to surface friends listening in roughly real time, but a 24-hour cutoff counts
+anyone who listened any time in the last full day as "now." Because the feed keeps the
+most-recent event per friend, a friend whose latest listen was hours ago (i.e.
+"yesterday" relative to a real-time feed) still passed the `listened_at >= cutoff`
+filter and was shown. Nothing else in the function was wrong — the single constant was
+three orders of magnitude too large for the feature's intent.
+
+**My fix and side-effect check.** Changed `RECENT_THRESHOLD` to `timedelta(minutes=30)`
+(matching the seed data's documented "within the past 30 minutes" intent). Boundary
+checks on both sides of the window: a friend who listened **5 min** ago still appears
+(`test_recent_friend_is_shown`), a friend who listened **120 min** ago no longer
+appears (`test_stale_friend_is_excluded`), and from darius's view nova (121 min) is now
+correctly gone while simone (16 min, inside the 30-min window) still appears. I also checked I hadn't
+touched `get_activity_feed` in the same file: it deliberately ignores recency (returns
+the most recent N events regardless of age), and it shares no code with the threshold,
+so narrowing the window doesn't affect it. Full suite: 15 passed.
+
+### Issue #3 — The same song keeps showing up twice in search
+
+**How I reproduced it.** This is the one where reproduction was subtle and AI's first
+answer was wrong (see AI Usage). The reported symptom is duplicate songs for songs with
+multiple tags. I searched for the 3-tag song "Crown Heights Anthem"
+(`search_songs("Heights")`) expecting duplicates — but got **1** result. To find out
+why, I compared two queries with the same join: selecting the **entity**
+(`db.session.query(Song).outerjoin(song_tags)…`) returned 1 row, while selecting a
+**column** (`db.session.query(Song.id).outerjoin(song_tags)…`) returned **3** rows —
+one per tag. That proved the join really does fan out 3 rows for a 3-tag song; the
+service only *looks* fine because the legacy SQLAlchemy `Query` auto-uniquifies full
+entities on `.all()`.
+
+**How I found the root cause.** Navigation path: `routes/songs.py`
+(`GET /songs/search` → `search_songs`) → `services/search_service.py`. Reading
+`search_songs`, the query `outerjoin`s the `song_tags` association table but the
+`filter` only references `Song.title` and `Song.artist` — the join contributes nothing
+to *which* songs match. Separately, `to_dict()` already loads each song's tags through
+the `tags` relationship, so the join isn't needed to populate tags either. The column-
+vs-entity experiment above is what made me confident: the join is a pure fan-out with
+no purpose, and the code was silently depending on implicit entity de-duplication to
+hide it.
+
+**The root cause.** `search_songs` joined `song_tags` (one row per song–tag pair)
+without a `DISTINCT` and without needing the join at all. A song with N tags produces N
+result rows. Today the visible duplicate is masked only because legacy `Query.all()`
+collapses duplicate entities by primary key — but that's fragile: the moment anyone
+selects columns instead of the entity, switches to SQLAlchemy 2.0's `select()` style
+(which does **not** auto-uniquify), or adds pagination/`count()`, the duplicates
+resurface. So the reported bug is a latent fan-out that the current ORM behavior
+happens to paper over.
+
+**My fix and side-effect check.** Removed the `outerjoin(song_tags, …)` entirely (and
+the now-unused `Tag`/`song_tags` imports), querying `Song` directly. This eliminates
+the fan-out at the source rather than masking it with `.distinct()`. Verified: a broad
+search (`q="a"`) returns 13 rows with 13 unique IDs (no duplicates), and the 3-tag song
+still comes back exactly once **with its tags intact** (`['rap','hip-hop','boom bap']`),
+confirming `to_dict()`'s tag loading was independent of the removed join. I chose
+removal over `.distinct()` because the join had no role in filtering — keeping it would
+have left dead, misleading code. Full suite: 15 passed; `test_search.py` still green.
+
+---
+
+## Regression tests
+
+- **`tests/test_feed.py` (new — mine)** guards **Issue #2**.
+  `test_stale_friend_is_excluded` seeds a friend whose only listen was 120 minutes ago
+  and asserts they do **not** appear in `get_friends_listening_now`. Against the buggy
+  `RECENT_THRESHOLD = timedelta(hours=24)` that friend *is* returned, so the assertion
+  `feed == []` fails; against the 30-minute fix it passes. I verified this directly by
+  monkeypatching the threshold back to 24h and watching the exact scenario return 1
+  friend instead of 0. A companion `test_recent_friend_is_shown` (5-minute-old event)
+  guards the other side of the boundary so a future "fix" can't just disable the feed.
+- **`tests/test_streaks.py::test_streak_increments_on_sunday`** (present in the repo)
+  guards **Issue #1**: it asserts a Saturday→Sunday listen increments the streak to 2.
+  Against the buggy `and today.weekday() != 6` guard, the Sunday update fell to the
+  reset branch and the streak became 1, so this test would have failed.
+- **`tests/test_playlists.py::test_playlist_returns_all_songs`** guards **Issue #5**:
+  it expects all 5 seeded songs; the `songs[:-1]` bug returned 4, failing the assertion.
+
 ---
 
 ## Summary of fixes
 
-| Issue | File | One-line change | Tests |
-|-------|------|-----------------|-------|
-| #1 | `services/streak_service.py` | removed spurious `and today.weekday() != 6` from the increment branch | 5/5 streak |
-| #4 | `services/notification_service.py` | added guarded `create_notification("song_rated", ...)` in `rate_song` | no regressions |
-| #5 | `services/playlist_service.py` | `songs[:-1]` → `songs` in `get_playlist_songs` | 2 playlist tests now pass |
+| Issue | File | One-line change |
+|-------|------|-----------------|
+| #1 | `services/streak_service.py` | removed spurious `and today.weekday() != 6` from the increment branch |
+| #2 | `services/feed_service.py` | `RECENT_THRESHOLD` `timedelta(hours=24)` → `timedelta(minutes=30)` |
+| #3 | `services/search_service.py` | removed the redundant `outerjoin(song_tags)` that fanned out one row per tag |
+| #4 | `services/notification_service.py` | added guarded `create_notification("song_rated", ...)` in `rate_song` |
+| #5 | `services/playlist_service.py` | `songs[:-1]` → `songs` in `get_playlist_songs` |
+| B1 (bonus) | `services/notification_service.py` | insert into `playlist_entries` directly (with `position`/`added_by`) instead of `playlist.songs.append` |
 
-Final state: `pytest tests/` → **13 passed**. Each fix is a separate commit on
-`bugfix/mixtape` using conventional-commit messages.
+Final state: `pytest tests/` → **15 passed** (13 original + 2 new feed regression
+tests). Each fix is a separate commit on `bugfix/mixtape` using conventional-commit
+messages.
 
 ### Bonus — bug found while reviewing (not in the issue tracker)
 

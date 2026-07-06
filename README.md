@@ -118,18 +118,20 @@ See the project brief for full submission requirements.
 
 ### Commit history (`bugfix/mixtape`)
 
-Each bug fix is its own commit with a `fix:` prefix:
+Each of the five tracked bugs is its own commit with a `fix:` prefix (plus a bonus
+crash fix and a regression-test commit):
 
 ![git log --oneline of the bugfix/mixtape branch](docs/git-log.png)
 
 ```
+795e3d0 test: add feed recency regression tests for Issue #2
+6f01d94 fix: stop search from duplicating multi-tag songs
+43a30a3 fix: narrow Friends Listening Now window from 24h to 30 min
 62e3f8d fix: insert playlist_entries directly so adding a new song doesn't crash
-0d468a0 docs: add AI usage section and finalize submission for review
 390e85f fix: return all playlist songs instead of dropping the last one
 7b2a91b fix: notify song sharer when their song is rated
 9dd24a6 fix: remove spurious Sunday guard from streak increment logic
-2dfdeaa Add .gitignore file and update README with setup instructions
-7b64551 initial commit
 ```
 
-Full root cause analyses for each fix are in [`submission.md`](submission.md).
+All five tracked issues (#1–#5) are fixed. Full root cause analyses for each fix are in
+[`submission.md`](submission.md).
