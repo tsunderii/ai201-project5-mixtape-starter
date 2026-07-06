@@ -276,3 +276,55 @@ and are fixed in the next entry.
 reading of the two sibling functions. I only asked AI to sanity-check that notifying
 inside the `existing` (re-rating) branch as well as the new-rating branch was
 reasonable; I decided to place the call after the shared commit so both paths notify.
+
+### Issue #5 — The last song in a playlist never shows up
+
+**How I reproduced it.** For every seeded playlist I compared the number of rows in
+the `playlist_entries` join table to what the service returned:
+`db.session.query(playlist_entries).filter(...).count()` vs
+`len(get_playlist_songs(pl.id))`. Every playlist had 7 entries but the service
+returned 6, and the missing one was always the highest-`position` (last) song — e.g.
+"Late Night Vibes" stopped at "Golden Hour". The `test_playlists.py` tests
+(`test_playlist_returns_all_songs` expects 5, `test_playlist_returns_songs_in_order`
+expects `Track 1..5`) failed the same way, confirming it independently.
+
+**How I found the root cause.** Navigation path: `routes/playlists.py`
+(`GET /playlists/<id>/songs` → `get_songs`) → `services/playlist_service.py`
+(`get_playlist_songs`). The route just wraps the service list in
+`{"songs", "count"}`, so the truncation had to be in the service. Reading
+`get_playlist_songs`, the query itself was correct — it joins `playlist_entries` and
+orders ascending by `position`, and my repro confirmed the *ordering* was right and
+only the tail was missing. That pointed straight at the return statement:
+`return [song.to_dict() for song in songs[:-1]]`. The `[:-1]` slice drops the last
+element of an already-correct, already-ordered list. The "off by exactly one, always
+the last" symptom matching a `[:-1]` slice is what made it certain.
+
+**The root cause.** The query returns the full, correctly ordered list of songs, but
+the list comprehension iterates over `songs[:-1]` instead of `songs`. `[:-1]` returns
+every element except the last, so the final (highest-position) song in every
+non-empty playlist is silently discarded. (The docstring even says "This function
+returns all songs in the playlist," which the code contradicted.)
+
+**My fix and side-effect check.** Changed `songs[:-1]` to `songs` so the comprehension
+returns all rows. Boundary checks: non-empty playlists now return all 7 seeded songs
+in position order with the correct last song; and the empty-playlist case is safe —
+`songs` is `[]`, so it returns `[]` (matching `test_empty_playlist_returns_empty_list`;
+note the old `[][:-1]` was also `[]`, so this edge was never the visible symptom). Full
+suite: **13 passed** (the two previously-failing playlist tests now pass, no
+regressions elsewhere).
+
+**AI usage.** None. This was a one-line slice bug found by reading the function after
+the repro localized the loss to "always exactly the last element."
+
+---
+
+## Summary of fixes
+
+| Issue | File | One-line change | Tests |
+|-------|------|-----------------|-------|
+| #1 | `services/streak_service.py` | removed spurious `and today.weekday() != 6` from the increment branch | 5/5 streak |
+| #4 | `services/notification_service.py` | added guarded `create_notification("song_rated", ...)` in `rate_song` | no regressions |
+| #5 | `services/playlist_service.py` | `songs[:-1]` → `songs` in `get_playlist_songs` | 2 playlist tests now pass |
+
+Final state: `pytest tests/` → **13 passed**. Each fix is a separate commit on
+`bugfix/mixtape` using conventional-commit messages.
