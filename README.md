@@ -115,3 +115,21 @@ fix: correct Sunday boundary condition in streak reset logic
 ```
 
 See the project brief for full submission requirements.
+
+### Commit history (`bugfix/mixtape`)
+
+Each bug fix is its own commit with a `fix:` prefix:
+
+![git log --oneline of the bugfix/mixtape branch](docs/git-log.png)
+
+```
+62e3f8d fix: insert playlist_entries directly so adding a new song doesn't crash
+0d468a0 docs: add AI usage section and finalize submission for review
+390e85f fix: return all playlist songs instead of dropping the last one
+7b2a91b fix: notify song sharer when their song is rated
+9dd24a6 fix: remove spurious Sunday guard from streak increment logic
+2dfdeaa Add .gitignore file and update README with setup instructions
+7b64551 initial commit
+```
+
+Full root cause analyses for each fix are in [`submission.md`](submission.md).
