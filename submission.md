@@ -6,6 +6,65 @@ Flask + SQLAlchemy app backed by SQLite (`mixtape.db`).
 
 ---
 
+## AI Usage
+
+I used an AI assistant throughout this project mainly as a **study partner for parts
+of the codebase I wasn't sure about** — a way to get a fast, plain-English
+explanation of unfamiliar code so I could then go read it myself and decide whether
+the explanation held up. I deliberately did *not* ask it to "find the bugs" for me,
+because a couple of times when I tried that early on it gave me confident-sounding
+answers that pointed at the wrong place. My rule ended up being: I find the suspicious
+code first, AI helps me understand it, then I verify by running the code.
+
+**Where AI genuinely helped me understand something:**
+
+- *SQLAlchemy relationships and join tables (orientation).* The `models.py`
+  self-referential `friends` relationship (`primaryjoin`/`secondaryjoin`) and the
+  `playlist_entries` association table with its extra `position` column were the parts
+  I understood least. I pasted them in and asked "what does this relationship actually
+  do and why are there two join conditions?" That explanation is what let me write the
+  data-model section of the map with confidence, and it's why I knew to look at
+  `position` when I got to the playlist ordering bug.
+- *Issue #1 — `weekday()` vs `isoweekday()`.* Once I'd narrowed the streak bug down to
+  the `today.weekday() != 6` clause by reading the function, I still wasn't 100% sure
+  which day `6` was. I asked AI to explain the difference between `datetime.weekday()`
+  (0=Mon…6=Sun) and `isoweekday()` (1=Mon…7=Sun). That confirmed `6` was Sunday — but
+  I didn't take its word for it; I ran `datetime(2026,7,5).weekday()` in a shell and
+  got `6`, and confirmed 2026-07-05 was a Sunday, before touching the code.
+- *Issue #4 — comparing two similar functions.* I could see that playlist-adds
+  notified but ratings didn't, so I gave AI both `add_to_playlist` and `rate_song` and
+  asked "what's the structural difference between these two blocks?" It helped me
+  articulate that one ends in a guarded `create_notification` call and the other just
+  commits and returns. I'd already spotted the gap by reading them side by side; AI
+  helped me put it into words and sanity-check that mirroring the guard
+  (`song.shared_by != user_id`) was the right pattern.
+- *Issue #5 — what `songs[:-1]` does.* This one I mostly knew, but I asked AI to
+  confirm that a `[:-1]` slice drops the last element and returns `[]` on an empty
+  list, since the empty-playlist edge case mattered for not breaking
+  `test_empty_playlist_returns_empty_list`. I verified both by running it.
+
+**Where AI was incomplete or pointed me the wrong way (and I had to check myself):**
+
+- When I first described the search duplicate symptom (Issue #3, which I ended up not
+  fixing) and asked what caused it, AI confidently said the outer join to `song_tags`
+  fans out one row per tag and I just needed `.distinct()`. That's a plausible story,
+  but when I actually ran `search?q=Heights` against a 3-tag song it returned the song
+  **once** — because the legacy SQLAlchemy `Query` auto-uniquifies full entities. So
+  the AI's explanation was the "textbook" answer but didn't match the running code.
+  This was the clearest reminder to always reproduce against the real app rather than
+  trust a plausible diagnosis.
+- For debugging generally, AI was not much use at *locating* bugs without the full
+  context — its value was explaining code I'd already found and confirming
+  language/library facts. The actual navigation (route → service → the specific line)
+  and every diagnosis was done by reading the call chain top-down and reproducing each
+  bug in a Python shell before changing anything.
+
+**Tools used:** an AI coding assistant for the explanations above; Python shell /
+`flask`-context scripts to reproduce bugs and verify fixes; `pytest` for regression
+checks; `git` for the per-fix commits.
+
+---
+
 ## Milestone 1 — Codebase Map
 
 ### Setup confirmed
