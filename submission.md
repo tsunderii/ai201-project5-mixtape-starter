@@ -233,3 +233,46 @@ to confirm one fact: that `datetime.weekday()` returns 0=Monday…6=Sunday (vs
 `isoweekday()`'s 1–7). I verified it myself by printing
 `datetime(2026,7,5).weekday()` → `6`. AI did not find the bug; it confirmed a
 convention after I'd narrowed it down.
+
+### Issue #4 — Notified when a friend added my song to a playlist, but not when they rated it
+
+**How I reproduced it.** In a Python shell against seeded data: nova rated a song
+shared by simone (`rate_song(nova.id, song.id, 5)`) and then read simone's
+notifications with `get_notifications(simone.id)`. Count stayed at 0. As a control in
+the same session, I had nova *add* one of simone's songs to a playlist
+(`add_to_playlist`) — simone's count went 0 → 1. So the reported asymmetry was real:
+adding notifies, rating doesn't.
+
+**How I found the root cause.** Navigation path: `routes/songs.py`
+(`POST /songs/<id>/rate` → imported from `notification_service`) →
+`services/notification_service.py`. The fact that *playlist* notifications worked but
+*rating* ones didn't told me to compare the two sibling functions in that same file.
+`add_to_playlist` ends with a guarded `create_notification(...)` call
+(`if song.shared_by != added_by_user_id:`). `rate_song` has the same shape up front
+(loads `song`, loads `rater`, commits) but its final statements are just
+`db.session.commit()` / `return rating` — the notification step present in its sibling
+is simply absent. Seeing the two functions side by side, with one having the
+side effect and the other missing it, is what made me confident.
+
+**The root cause.** `rate_song` correctly creates/updates the `Rating` row but never
+calls `create_notification`, so the song's original sharer is never told their song
+was rated. It's a missing side effect, not a logic error — the notification
+infrastructure (`create_notification`, the `Notification` model, the
+`GET /users/<id>/notifications` retrieval path) all work; `rate_song` just never
+invokes it. (The seed data's one "playlist add" notification is inserted directly,
+which is why the feature *looked* half-working.)
+
+**My fix and side-effect check.** After the commit in `rate_song`, added a guarded
+`create_notification` mirroring `add_to_playlist`: notify `song.shared_by` with type
+`"song_rated"` (the exact type string the `create_notification` docstring already
+lists) only when `song.shared_by != user_id` (so rating your own song doesn't notify
+you). Verified: a non-self rating adds exactly one `song_rated` notification with a
+correct body; re-rating (the existing-`Rating` update path) also notifies; rating your
+own song adds zero. The full suite went from 11 passed to 11 passed + the 2
+pre-existing `test_playlists.py` failures, which are Issue #5 (unrelated to this file)
+and are fixed in the next entry.
+
+**AI usage.** None needed for diagnosis — the fix was found by direct side-by-side
+reading of the two sibling functions. I only asked AI to sanity-check that notifying
+inside the `existing` (re-rating) branch as well as the new-rating branch was
+reasonable; I decided to place the call after the shared commit so both paths notify.
